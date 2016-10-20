@@ -182,6 +182,8 @@ LIBVPX_TEST_SRCS-$(CONFIG_ENCODERS) += sum_squares_test.cc
 TEST_INTRA_PRED_SPEED_SRCS-yes := test_intra_pred_speed.cc
 TEST_INTRA_PRED_SPEED_SRCS-yes += ../md5_utils.h ../md5_utils.c
 
+TEST_HADAMARD_SPEED_SRCS-yes := test_hadamard_speed.cc
+
 endif # CONFIG_SHARED
 
 include $(SRC_PATH_BARE)/test/test-data.mk

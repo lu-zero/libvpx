@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2012 The WebM project authors. All Rights Reserved.
+ *  Copyright (c) 2017 The WebM project authors. All Rights Reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -15,6 +15,9 @@
 #if ARCH_X86 || ARCH_X86_64
 #include "vpx_ports/x86.h"
 #endif
+#if ARCH_PPC
+#include "vpx_ports/ppc.h"
+#endif  // ARCH_PPC
 extern "C" {
 #if CONFIG_VP8
 extern void vp8_rtcd();
@@ -26,7 +29,7 @@ extern void vpx_dsp_rtcd();
 extern void vpx_scale_rtcd();
 }
 
-#if ARCH_X86 || ARCH_X86_64
+#if ARCH_X86 || ARCH_X86_64 || ARCH_PPC
 static void append_negative_gtest_filter(const char *str) {
   std::string filter = ::testing::FLAGS_gtest_filter;
   // Negative patterns begin with one '-' followed by a ':' separated list.
@@ -34,7 +37,7 @@ static void append_negative_gtest_filter(const char *str) {
   filter += str;
   ::testing::FLAGS_gtest_filter = filter;
 }
-#endif  // ARCH_X86 || ARCH_X86_64
+#endif  // ARCH_X86 || ARCH_X86_64 || ARCH_PPC
 
 int main(int argc, char **argv) {
   ::testing::InitGoogleTest(&argc, argv);
@@ -54,6 +57,13 @@ int main(int argc, char **argv) {
   if (!(simd_caps & HAS_AVX)) append_negative_gtest_filter(":AVX.*:AVX/*");
   if (!(simd_caps & HAS_AVX2)) append_negative_gtest_filter(":AVX2.*:AVX2/*");
 #endif  // ARCH_X86 || ARCH_X86_64
+
+#if ARCH_PPC
+  const int simd_caps = ppc_simd_caps();
+  if (!(simd_caps & HAS_VSX)) {
+      append_negative_gtest_filter(":VSX.*:VSX/*");
+  }
+#endif  // ARCH_PPC
 
 #if !CONFIG_SHARED
 // Shared library builds don't support whitebox tests
