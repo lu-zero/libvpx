@@ -697,6 +697,9 @@ process_common_toolchain() {
       *sparc*)
         tgt_isa=sparc
         ;;
+      power*)
+        tgt_isa=ppc
+        ;;
     esac
 
     # detect tgt_os
@@ -774,6 +777,9 @@ process_common_toolchain() {
       ;;
     mips*)
       enable_feature mips
+      ;;
+    ppc*)
+      enable_feature ppc
       ;;
   esac
 
@@ -1146,6 +1152,24 @@ EOF
       check_add_cflags -march=${tgt_isa}
       check_add_asflags -march=${tgt_isa}
       check_add_asflags -KPIC
+      ;;
+    ppc*)
+      link_with_cc=gcc
+      setup_gnu_toolchain
+      for ext in ${ARCH_EXT_LIST_PPC}; do
+        # disable higher order extensions to simplify asm dependencies
+        if [ "$disable_exts" = "yes" ]; then
+          if ! disabled $ext; then
+            RTCD_OPTIONS="${RTCD_OPTIONS}--disable-${ext} "
+            disable_feature $ext
+          fi
+        elif disabled $ext; then
+          disable_exts="yes"
+        else
+          check_gcc_machine_option $ext $ext
+        fi
+      done
+      soft_enable runtime_cpu_detect
       ;;
     x86*)
       case  ${tgt_os} in
