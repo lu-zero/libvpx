@@ -478,6 +478,9 @@ INSTANTIATE_TEST_CASE_P(
                       make_tuple(64, &vpx_int_pro_col_neon,
                                  &vpx_int_pro_col_c)));
 
+// TODO(jingning): Remove the highbitdepth flag once the SIMD functions are
+// in place.
+#if !CONFIG_VP9_HIGHBITDEPTH
 INSTANTIATE_TEST_CASE_P(NEON, SatdTest,
                         ::testing::Values(make_tuple(16, &vpx_satd_neon),
                                           make_tuple(64, &vpx_satd_neon),
