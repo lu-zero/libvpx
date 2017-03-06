@@ -1,4 +1,5 @@
 LIBVPX_TEST_SRCS-yes += acm_random.h
+LIBVPX_TEST_SRCS-yes += buffer.h
 LIBVPX_TEST_SRCS-yes += clear_system_state.h
 LIBVPX_TEST_SRCS-yes += codec_factory.h
 LIBVPX_TEST_SRCS-yes += md5_helper.h
@@ -35,6 +36,7 @@ LIBVPX_TEST_SRCS-$(CONFIG_VP8_ENCODER) += cq_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP8_ENCODER) += keyframe_test.cc
 
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_DECODER) += byte_alignment_test.cc
+LIBVPX_TEST_SRCS-$(CONFIG_VP9_DECODER) += decode_svc_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_DECODER) += external_frame_buffer_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_DECODER) += user_priv_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_DECODER) += vp9_frame_parallel_test.cc
@@ -155,7 +157,7 @@ LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += fdct8x8_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += hadamard_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += minmax_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += variance_test.cc
-LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += vp9_error_block_test.cc
+LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += vp9_block_error_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += vp9_quantize_test.cc
 LIBVPX_TEST_SRCS-$(CONFIG_VP9_ENCODER) += vp9_subtract_test.cc
 
@@ -179,6 +181,8 @@ LIBVPX_TEST_SRCS-$(CONFIG_ENCODERS) += sum_squares_test.cc
 
 TEST_INTRA_PRED_SPEED_SRCS-yes := test_intra_pred_speed.cc
 TEST_INTRA_PRED_SPEED_SRCS-yes += ../md5_utils.h ../md5_utils.c
+
+TEST_HADAMARD_SPEED_SRCS-yes := test_hadamard_speed.cc
 
 endif # CONFIG_SHARED
 

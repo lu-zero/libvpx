@@ -43,6 +43,7 @@
 #endif
 #include "encodeframe.h"
 
+#include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <limits.h>
@@ -446,6 +447,18 @@ static void dealloc_compressor_data(VP8_COMP *cpi) {
   cpi->mb.pip = 0;
 
 #if CONFIG_MULTITHREAD
+  /* De-allocate mutex */
+  if (cpi->pmutex != NULL) {
+    VP8_COMMON *const pc = &cpi->common;
+    int i;
+
+    for (i = 0; i < pc->mb_rows; ++i) {
+      pthread_mutex_destroy(&cpi->pmutex[i]);
+    }
+    vpx_free(cpi->pmutex);
+    cpi->pmutex = NULL;
+  }
+
   vpx_free(cpi->mt_current_mb_col);
   cpi->mt_current_mb_col = NULL;
 #endif
@@ -1075,6 +1088,9 @@ void vp8_alloc_compressor_data(VP8_COMP *cpi) {
 
   int width = cm->Width;
   int height = cm->Height;
+#if CONFIG_MULTITHREAD
+  int prev_mb_rows = cm->mb_rows;
+#endif
 
   if (vp8_alloc_frame_buffers(cm, width, height)) {
     vpx_internal_error(&cpi->common.error, VPX_CODEC_MEM_ERROR,
@@ -1164,6 +1180,25 @@ void vp8_alloc_compressor_data(VP8_COMP *cpi) {
   }
 
   if (cpi->oxcf.multi_threaded > 1) {
+    int i;
+
+    /* De-allocate and re-allocate mutex */
+    if (cpi->pmutex != NULL) {
+      for (i = 0; i < prev_mb_rows; ++i) {
+        pthread_mutex_destroy(&cpi->pmutex[i]);
+      }
+      vpx_free(cpi->pmutex);
+      cpi->pmutex = NULL;
+    }
+
+    CHECK_MEM_ERROR(cpi->pmutex,
+                    vpx_malloc(sizeof(*cpi->pmutex) * cm->mb_rows));
+    if (cpi->pmutex) {
+      for (i = 0; i < cm->mb_rows; ++i) {
+        pthread_mutex_init(&cpi->pmutex[i], NULL);
+      }
+    }
+
     vpx_free(cpi->mt_current_mb_col);
     CHECK_MEM_ERROR(cpi->mt_current_mb_col,
                     vpx_malloc(sizeof(*cpi->mt_current_mb_col) * cm->mb_rows));
@@ -1599,8 +1634,7 @@ void vp8_change_config(VP8_COMP *cpi, VP8_CONFIG *oxcf) {
   cm->sharpness_level = cpi->oxcf.Sharpness;
 
   if (cm->horiz_scale != NORMAL || cm->vert_scale != NORMAL) {
-    int UNINITIALIZED_IS_SAFE(hr), UNINITIALIZED_IS_SAFE(hs);
-    int UNINITIALIZED_IS_SAFE(vr), UNINITIALIZED_IS_SAFE(vs);
+    int hr, hs, vr, vs;
 
     Scale2Ratio(cm->horiz_scale, &hr, &hs);
     Scale2Ratio(cm->vert_scale, &vr, &vs);
@@ -2470,8 +2504,7 @@ static void scale_and_extend_source(YV12_BUFFER_CONFIG *sd, VP8_COMP *cpi) {
   /* are we resizing the image */
   if (cm->horiz_scale != 0 || cm->vert_scale != 0) {
 #if CONFIG_SPATIAL_RESAMPLING
-    int UNINITIALIZED_IS_SAFE(hr), UNINITIALIZED_IS_SAFE(hs);
-    int UNINITIALIZED_IS_SAFE(vr), UNINITIALIZED_IS_SAFE(vs);
+    int hr, hs, vr, vs;
     int tmp_height;
 
     if (cm->vert_scale == 3) {
@@ -2504,8 +2537,7 @@ static int resize_key_frame(VP8_COMP *cpi) {
    */
   if (cpi->oxcf.allow_spatial_resampling &&
       (cpi->oxcf.end_usage == USAGE_STREAM_FROM_SERVER)) {
-    int UNINITIALIZED_IS_SAFE(hr), UNINITIALIZED_IS_SAFE(hs);
-    int UNINITIALIZED_IS_SAFE(vr), UNINITIALIZED_IS_SAFE(vs);
+    int hr, hs, vr, vs;
     int new_width, new_height;
 
     /* If we are below the resample DOWN watermark then scale down a
@@ -3021,6 +3053,7 @@ static int measure_square_diff_partial(YV12_BUFFER_CONFIG *source,
   }
   // Only return non-zero if we have at least ~1/16 samples for estimate.
   if (num_blocks > (tot_num_blocks >> 4)) {
+    assert(num_blocks != 0);
     return (Total / num_blocks);
   } else {
     return 0;
@@ -4028,9 +4061,9 @@ static void encode_frame_to_data_rate(VP8_COMP *cpi, size_t *size,
 #if !CONFIG_REALTIME_ONLY
       top_index = cpi->active_worst_quality;
 #endif  // !CONFIG_REALTIME_ONLY
-        /* If we have updated the active max Q do not call
-         * vp8_update_rate_correction_factors() this loop.
-         */
+      /* If we have updated the active max Q do not call
+       * vp8_update_rate_correction_factors() this loop.
+       */
       active_worst_qchanged = 1;
     } else {
       active_worst_qchanged = 0;

@@ -553,6 +553,9 @@ static vpx_codec_err_t decoder_decode(vpx_codec_alg_priv_t *ctx,
                                    ctx->decrypt_cb, ctx->decrypt_state);
   if (res != VPX_CODEC_OK) return res;
 
+  if (ctx->svc_decoding && ctx->svc_spatial_layer < frame_count - 1)
+    frame_count = ctx->svc_spatial_layer + 1;
+
   if (ctx->frame_parallel_decode) {
     // Decode in frame parallel mode. When decoding in this mode, the frame
     // passed to the decoder must be either a normal frame or a superframe with
@@ -829,6 +832,15 @@ static vpx_codec_err_t ctrl_set_postproc(vpx_codec_alg_priv_t *ctx,
 #endif
 }
 
+static vpx_codec_err_t ctrl_get_quantizer(vpx_codec_alg_priv_t *ctx,
+                                          va_list args) {
+  int *const arg = va_arg(args, int *);
+  if (arg == NULL) return VPX_CODEC_INVALID_PARAM;
+  *arg =
+      ((FrameWorkerData *)ctx->frame_workers[0].data1)->pbi->common.base_qindex;
+  return VPX_CODEC_OK;
+}
+
 static vpx_codec_err_t ctrl_get_last_ref_updates(vpx_codec_alg_priv_t *ctx,
                                                  va_list args) {
   int *const update_info = va_arg(args, int *);
@@ -1001,6 +1013,16 @@ static vpx_codec_err_t ctrl_set_skip_loop_filter(vpx_codec_alg_priv_t *ctx,
   return VPX_CODEC_OK;
 }
 
+static vpx_codec_err_t ctrl_set_spatial_layer_svc(vpx_codec_alg_priv_t *ctx,
+                                                  va_list args) {
+  ctx->svc_decoding = 1;
+  ctx->svc_spatial_layer = va_arg(args, int);
+  if (ctx->svc_spatial_layer < 0)
+    return VPX_CODEC_INVALID_PARAM;
+  else
+    return VPX_CODEC_OK;
+}
+
 static vpx_codec_ctrl_fn_map_t decoder_ctrl_maps[] = {
   { VP8_COPY_REFERENCE, ctrl_copy_reference },
 
@@ -1011,8 +1033,10 @@ static vpx_codec_ctrl_fn_map_t decoder_ctrl_maps[] = {
   { VPXD_SET_DECRYPTOR, ctrl_set_decryptor },
   { VP9_SET_BYTE_ALIGNMENT, ctrl_set_byte_alignment },
   { VP9_SET_SKIP_LOOP_FILTER, ctrl_set_skip_loop_filter },
+  { VP9_DECODE_SVC_SPATIAL_LAYER, ctrl_set_spatial_layer_svc },
 
   // Getters
+  { VPXD_GET_LAST_QUANTIZER, ctrl_get_quantizer },
   { VP8D_GET_LAST_REF_UPDATES, ctrl_get_last_ref_updates },
   { VP8D_GET_FRAME_CORRUPTED, ctrl_get_frame_corrupted },
   { VP9_GET_REFERENCE, ctrl_get_reference },
@@ -1029,7 +1053,10 @@ static vpx_codec_ctrl_fn_map_t decoder_ctrl_maps[] = {
 CODEC_INTERFACE(vpx_codec_vp9_dx) = {
   "WebM Project VP9 Decoder" VERSION_STRING,
   VPX_CODEC_INTERNAL_ABI_VERSION,
-  VPX_CODEC_CAP_DECODER | VP9_CAP_POSTPROC |
+#if CONFIG_VP9_HIGHBITDEPTH
+  VPX_CODEC_CAP_HIGHBITDEPTH |
+#endif
+      VPX_CODEC_CAP_DECODER | VP9_CAP_POSTPROC |
       VPX_CODEC_CAP_EXTERNAL_FRAME_BUFFER,  // vpx_codec_caps_t
   decoder_init,                             // vpx_codec_init_fn_t
   decoder_destroy,                          // vpx_codec_destroy_fn_t

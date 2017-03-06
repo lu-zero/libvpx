@@ -9,11 +9,11 @@
  */
 
 #include <assert.h>
+#include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
-#include <limits.h>
 
 #include "./vpx_config.h"
 
@@ -92,31 +92,24 @@ static const arg_def_t md5arg =
 static const arg_def_t outbitdeptharg =
     ARG_DEF(NULL, "output-bit-depth", 1, "Output bit-depth for decoded frames");
 #endif
+static const arg_def_t svcdecodingarg = ARG_DEF(
+    NULL, "svc-decode-layer", 1, "Decode SVC stream up to given spatial layer");
+static const arg_def_t framestatsarg =
+    ARG_DEF(NULL, "framestats", 1, "Output per-frame stats (.csv format)");
 
-static const arg_def_t *all_args[] = { &codecarg,
-                                       &use_yv12,
-                                       &use_i420,
-                                       &flipuvarg,
-                                       &rawvideo,
-                                       &noblitarg,
-                                       &progressarg,
-                                       &limitarg,
-                                       &skiparg,
-                                       &postprocarg,
-                                       &summaryarg,
-                                       &outputfile,
-                                       &threadsarg,
-                                       &frameparallelarg,
-                                       &verbosearg,
-                                       &scalearg,
-                                       &fb_arg,
-                                       &md5arg,
-                                       &error_concealment,
-                                       &continuearg,
+static const arg_def_t *all_args[] = {
+  &codecarg,          &use_yv12,         &use_i420,
+  &flipuvarg,         &rawvideo,         &noblitarg,
+  &progressarg,       &limitarg,         &skiparg,
+  &postprocarg,       &summaryarg,       &outputfile,
+  &threadsarg,        &frameparallelarg, &verbosearg,
+  &scalearg,          &fb_arg,           &md5arg,
+  &error_concealment, &continuearg,
 #if CONFIG_VP9_HIGHBITDEPTH
-                                       &outbitdeptharg,
+  &outbitdeptharg,
 #endif
-                                       NULL };
+  &svcdecodingarg,    &framestatsarg,    NULL
+};
 
 #if CONFIG_VP8_DECODER
 static const arg_def_t addnoise_level =
@@ -519,6 +512,8 @@ static int main_loop(int argc, const char **argv_) {
 #if CONFIG_VP9_HIGHBITDEPTH
   unsigned int output_bit_depth = 0;
 #endif
+  int svc_decoding = 0;
+  int svc_spatial_layer = 0;
 #if CONFIG_VP8_DECODER
   vp8_postproc_cfg_t vp8_pp_cfg = { 0, 0, 0 };
 #endif
@@ -536,6 +531,8 @@ static int main_loop(int argc, const char **argv_) {
   const char *outfile_pattern = NULL;
   char outfile_name[PATH_MAX] = { 0 };
   FILE *outfile = NULL;
+
+  FILE *framestats_file = NULL;
 
   MD5Context md5_ctx;
   unsigned char md5_digest[16];
@@ -610,6 +607,16 @@ static int main_loop(int argc, const char **argv_) {
       output_bit_depth = arg_parse_uint(&arg);
     }
 #endif
+    else if (arg_match(&arg, &svcdecodingarg, argi)) {
+      svc_decoding = 1;
+      svc_spatial_layer = arg_parse_uint(&arg);
+    } else if (arg_match(&arg, &framestatsarg, argi)) {
+      framestats_file = fopen(arg.val, "w");
+      if (!framestats_file) {
+        die("Error: Could not open --framestats file (%s) for writing.\n",
+            arg.val);
+      }
+    }
 #if CONFIG_VP8_DECODER
     else if (arg_match(&arg, &addnoise_level, argi)) {
       postproc = 1;
@@ -726,7 +733,14 @@ static int main_loop(int argc, const char **argv_) {
             vpx_codec_error(&decoder));
     goto fail2;
   }
-
+  if (svc_decoding) {
+    if (vpx_codec_control(&decoder, VP9_DECODE_SVC_SPATIAL_LAYER,
+                          svc_spatial_layer)) {
+      fprintf(stderr, "Failed to set spatial layer for svc decode: %s\n",
+              vpx_codec_error(&decoder));
+      goto fail;
+    }
+  }
   if (!quiet) fprintf(stderr, "%s\n", decoder.name);
 
 #if CONFIG_VP8_DECODER
@@ -760,6 +774,8 @@ static int main_loop(int argc, const char **argv_) {
   frame_avail = 1;
   got_data = 0;
 
+  if (framestats_file) fprintf(framestats_file, "bytes,qp\n");
+
   /* Decode file */
   while (frame_avail || got_data) {
     vpx_codec_iter_t iter = NULL;
@@ -780,9 +796,19 @@ static int main_loop(int argc, const char **argv_) {
           const char *detail = vpx_codec_error_detail(&decoder);
           warn("Failed to decode frame %d: %s", frame_in,
                vpx_codec_error(&decoder));
-
           if (detail) warn("Additional information: %s", detail);
+          corrupted = 1;
           if (!keep_going) goto fail;
+        }
+
+        if (framestats_file) {
+          int qp;
+          if (vpx_codec_control(&decoder, VPXD_GET_LAST_QUANTIZER, &qp)) {
+            warn("Failed VPXD_GET_LAST_QUANTIZER: %s",
+                 vpx_codec_error(&decoder));
+            if (!keep_going) goto fail;
+          }
+          fprintf(framestats_file, "%d,%d\n", (int)bytes_in_buffer, qp);
         }
 
         vpx_usec_timer_mark(&timer);
@@ -800,6 +826,8 @@ static int main_loop(int argc, const char **argv_) {
       // Flush the decoder in frame parallel decode.
       if (vpx_codec_decode(&decoder, NULL, 0, NULL, 0)) {
         warn("Failed to flush decoder: %s", vpx_codec_error(&decoder));
+        corrupted = 1;
+        if (!keep_going) goto fail;
       }
     }
 
@@ -812,7 +840,7 @@ static int main_loop(int argc, const char **argv_) {
     vpx_usec_timer_mark(&timer);
     dx_time += (unsigned int)vpx_usec_timer_elapsed(&timer);
 
-    if (!frame_parallel &&
+    if (!frame_parallel && !corrupted &&
         vpx_codec_control(&decoder, VP8D_GET_FRAME_CORRUPTED, &corrupted)) {
       warn("Failed VP8_GET_FRAME_CORRUPTED: %s", vpx_codec_error(&decoder));
       if (!keep_going) goto fail;
@@ -1015,6 +1043,8 @@ fail2:
   free(ext_fb_list.ext_fb);
 
   fclose(infile);
+  if (framestats_file) fclose(framestats_file);
+
   free(argv);
 
   return ret;

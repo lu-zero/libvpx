@@ -838,8 +838,9 @@ static void decode_block(TileWorkerData *twd, VP9Decoder *const pbi, int mi_row,
                              : xd->mb_to_right_edge >> (5 + pd->subsampling_x));
         const int max_blocks_high =
             num_4x4_h +
-            (xd->mb_to_bottom_edge >= 0 ? 0 : xd->mb_to_bottom_edge >>
-                                                  (5 + pd->subsampling_y));
+            (xd->mb_to_bottom_edge >= 0
+                 ? 0
+                 : xd->mb_to_bottom_edge >> (5 + pd->subsampling_y));
 
         xd->max_blocks_wide = xd->mb_to_right_edge >= 0 ? 0 : max_blocks_wide;
         xd->max_blocks_high = xd->mb_to_bottom_edge >= 0 ? 0 : max_blocks_high;
@@ -1517,7 +1518,6 @@ static int tile_worker_hook(TileWorkerData *const tile_data,
     return 0;
   }
 
-  tile_data->xd.error_info = &tile_data->error_info;
   tile_data->xd.corrupted = 0;
 
   do {
@@ -1529,6 +1529,8 @@ static int tile_worker_hook(TileWorkerData *const tile_data,
                         &tile_data->error_info, &tile_data->bit_reader,
                         pbi->decrypt_cb, pbi->decrypt_state);
     vp9_init_macroblockd(&pbi->common, &tile_data->xd, tile_data->dqcoeff);
+    // init resets xd.error_info
+    tile_data->xd.error_info = &tile_data->error_info;
 
     for (mi_row = tile->mi_row_start; mi_row < tile->mi_row_end;
          mi_row += MI_BLOCK_SIZE) {

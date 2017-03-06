@@ -138,17 +138,6 @@ void vp9_init3smotion_compensation(search_site_config *cfg, int stride) {
   cfg->total_steps = ss_count / cfg->searches_per_step;
 }
 
-/* Estimated (square) error cost of a motion vector (r,c). The 14 scale comes
- * from the same math as in mv_err_cost(). */
-#define MVC(r, c)                                                 \
-  (mvcost                                                         \
-       ? ((unsigned)(mvjcost[((r) != rr) * 2 + ((c) != rc)] +     \
-                     mvcost[0][((r)-rr)] + mvcost[1][((c)-rc)]) * \
-              error_per_bit +                                     \
-          8192) >>                                                \
-             14                                                   \
-       : 0)
-
 // convert motion vector component to offset for sv[a]f calc
 static INLINE int sp(int x) { return x & 7; }
 
@@ -161,6 +150,8 @@ static INLINE const uint8_t *pre(const uint8_t *buf, int stride, int r, int c) {
 #define CHECK_BETTER(v, r, c)                                                \
   if (c >= minc && c <= maxc && r >= minr && r <= maxr) {                    \
     int64_t tmpmse;                                                          \
+    const MV mv = { r, c };                                                  \
+    const MV ref_mv = { rr, rc };                                            \
     if (second_pred == NULL) {                                               \
       thismse = vfp->svf(pre(y, y_stride, r, c), y_stride, sp(c), sp(r), z,  \
                          src_stride, &sse);                                  \
@@ -169,7 +160,7 @@ static INLINE const uint8_t *pre(const uint8_t *buf, int stride, int r, int c) {
                           src_stride, &sse, second_pred);                    \
     }                                                                        \
     tmpmse = thismse;                                                        \
-    tmpmse += MVC(r, c);                                                     \
+    tmpmse += mv_err_cost(&mv, &ref_mv, mvjcost, mvcost, error_per_bit);     \
     if (tmpmse >= INT_MAX) {                                                 \
       v = INT_MAX;                                                           \
     } else if ((v = (uint32_t)tmpmse) < besterr) {                           \
@@ -186,13 +177,16 @@ static INLINE const uint8_t *pre(const uint8_t *buf, int stride, int r, int c) {
 /* checks if (r, c) has better score than previous best */
 #define CHECK_BETTER(v, r, c)                                                \
   if (c >= minc && c <= maxc && r >= minr && r <= maxr) {                    \
+    const MV mv = { r, c };                                                  \
+    const MV ref_mv = { rr, rc };                                            \
     if (second_pred == NULL)                                                 \
       thismse = vfp->svf(pre(y, y_stride, r, c), y_stride, sp(c), sp(r), z,  \
                          src_stride, &sse);                                  \
     else                                                                     \
       thismse = vfp->svaf(pre(y, y_stride, r, c), y_stride, sp(c), sp(r), z, \
                           src_stride, &sse, second_pred);                    \
-    if ((v = MVC(r, c) + thismse) < besterr) {                               \
+    if ((v = mv_err_cost(&mv, &ref_mv, mvjcost, mvcost, error_per_bit) +     \
+             thismse) < besterr) {                                           \
       besterr = v;                                                           \
       br = r;                                                                \
       bc = c;                                                                \
@@ -277,7 +271,7 @@ static INLINE const uint8_t *pre(const uint8_t *buf, int stride, int r, int c) {
   const uint8_t *const z = x->plane[0].src.buf;                            \
   const int src_stride = x->plane[0].src.stride;                           \
   const MACROBLOCKD *xd = &x->e_mbd;                                       \
-  unsigned int besterr = INT_MAX;                                          \
+  unsigned int besterr = UINT_MAX;                                         \
   unsigned int sse;                                                        \
   unsigned int whichdir;                                                   \
   int thismse;                                                             \
@@ -472,7 +466,7 @@ uint32_t vp9_find_best_sub_pixel_tree_pruned_evenmore(
 
   if ((abs(bestmv->col - ref_mv->col) > (MAX_FULL_PEL_VAL << 3)) ||
       (abs(bestmv->row - ref_mv->row) > (MAX_FULL_PEL_VAL << 3)))
-    return INT_MAX;
+    return UINT_MAX;
 
   return besterr;
 }
@@ -622,7 +616,7 @@ uint32_t vp9_find_best_sub_pixel_tree_pruned(
 
   if ((abs(bestmv->col - ref_mv->col) > (MAX_FULL_PEL_VAL << 3)) ||
       (abs(bestmv->row - ref_mv->row) > (MAX_FULL_PEL_VAL << 3)))
-    return INT_MAX;
+    return UINT_MAX;
 
   return besterr;
 }
@@ -646,7 +640,7 @@ uint32_t vp9_find_best_sub_pixel_tree(
   const uint8_t *const src_address = z;
   const int src_stride = x->plane[0].src.stride;
   const MACROBLOCKD *xd = &x->e_mbd;
-  unsigned int besterr = INT_MAX;
+  unsigned int besterr = UINT_MAX;
   unsigned int sse;
   int thismse;
   const int y_stride = xd->plane[0].pre[0].stride;
@@ -708,7 +702,7 @@ uint32_t vp9_find_best_sub_pixel_tree(
           *sse1 = sse;
         }
       } else {
-        cost_array[idx] = INT_MAX;
+        cost_array[idx] = UINT_MAX;
       }
     }
 
@@ -737,7 +731,7 @@ uint32_t vp9_find_best_sub_pixel_tree(
         *sse1 = sse;
       }
     } else {
-      cost_array[idx] = INT_MAX;
+      cost_array[idx] = UINT_MAX;
     }
 
     if (best_idx < 4 && best_idx >= 0) {
@@ -771,12 +765,11 @@ uint32_t vp9_find_best_sub_pixel_tree(
 
   if ((abs(bestmv->col - ref_mv->col) > (MAX_FULL_PEL_VAL << 3)) ||
       (abs(bestmv->row - ref_mv->row) > (MAX_FULL_PEL_VAL << 3)))
-    return INT_MAX;
+    return UINT_MAX;
 
   return besterr;
 }
 
-#undef MVC
 #undef CHECK_BETTER
 
 static INLINE int check_bounds(const MvLimits *mv_limits, int row, int col,
@@ -858,13 +851,12 @@ static INLINE void calc_int_cost_list(const MACROBLOCK *x, const MV *ref_mv,
 // candidates as indicated in the num_candidates and candidates arrays
 // passed into this function
 //
-static int vp9_pattern_search(const MACROBLOCK *x, MV *ref_mv, int search_param,
-                              int sad_per_bit, int do_init_search,
-                              int *cost_list, const vp9_variance_fn_ptr_t *vfp,
-                              int use_mvcost, const MV *center_mv, MV *best_mv,
-                              const int num_candidates[MAX_PATTERN_SCALES],
-                              const MV candidates[MAX_PATTERN_SCALES]
-                                                 [MAX_PATTERN_CANDIDATES]) {
+static int vp9_pattern_search(
+    const MACROBLOCK *x, MV *ref_mv, int search_param, int sad_per_bit,
+    int do_init_search, int *cost_list, const vp9_variance_fn_ptr_t *vfp,
+    int use_mvcost, const MV *center_mv, MV *best_mv,
+    const int num_candidates[MAX_PATTERN_SCALES],
+    const MV candidates[MAX_PATTERN_SCALES][MAX_PATTERN_CANDIDATES]) {
   const MACROBLOCKD *const xd = &x->e_mbd;
   static const int search_param_to_steps[MAX_MVSEARCH_STEPS] = {
     10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
@@ -1822,7 +1814,9 @@ unsigned int vp9_int_pro_motion_estimation(const VP9_COMP *cpi, MACROBLOCK *x,
   }
 
 #if CONFIG_VP9_HIGHBITDEPTH
-  {
+  // TODO(jingning): Implement integral projection functions for high bit-depth
+  // setting and remove this part of code.
+  if (xd->bd != 8) {
     unsigned int this_sad;
     tmp_mv->row = 0;
     tmp_mv->col = 0;
@@ -1998,8 +1992,17 @@ static int full_pixel_exhaustive(VP9_COMP *cpi, MACROBLOCK *x,
   int range = sf->mesh_patterns[0].range;
   int baseline_interval_divisor;
 
+#if CONFIG_MULTITHREAD
+  if (NULL != x->search_count_mutex) pthread_mutex_lock(x->search_count_mutex);
+#endif
+
   // Keep track of number of exhaustive calls (this frame in this thread).
   ++(*x->ex_search_count_ptr);
+
+#if CONFIG_MULTITHREAD
+  if (NULL != x->search_count_mutex)
+    pthread_mutex_unlock(x->search_count_mutex);
+#endif
 
   // Trap illegal values for interval and range for this function.
   if ((range < MIN_RANGE) || (range > MAX_RANGE) || (interval < MIN_INTERVAL) ||
@@ -2318,11 +2321,14 @@ int vp9_refining_search_8p_c(const MACROBLOCK *x, MV *ref_mv, int error_per_bit,
   const struct buf_2d *const what = &x->plane[0].src;
   const struct buf_2d *const in_what = &xd->plane[0].pre[0];
   const MV fcenter_mv = { center_mv->row >> 3, center_mv->col >> 3 };
-  unsigned int best_sad =
+  unsigned int best_sad = INT_MAX;
+  int i, j;
+  clamp_mv(ref_mv, x->mv_limits.col_min, x->mv_limits.col_max,
+           x->mv_limits.row_min, x->mv_limits.row_max);
+  best_sad =
       fn_ptr->sdaf(what->buf, what->stride, get_buf_from_mv(in_what, ref_mv),
                    in_what->stride, second_pred) +
       mvsad_err_cost(x, ref_mv, &fcenter_mv, error_per_bit);
-  int i, j;
 
   for (i = 0; i < search_range; ++i) {
     int best_site = -1;
@@ -2358,21 +2364,35 @@ int vp9_refining_search_8p_c(const MACROBLOCK *x, MV *ref_mv, int error_per_bit,
 #define MIN_EX_SEARCH_LIMIT 128
 static int is_exhaustive_allowed(VP9_COMP *cpi, MACROBLOCK *x) {
   const SPEED_FEATURES *const sf = &cpi->sf;
-  const int max_ex =
-      VPXMAX(MIN_EX_SEARCH_LIMIT,
-             (*x->m_search_count_ptr * sf->max_exaustive_pct) / 100);
+  int is_exhaustive_allowed;
+  int max_ex;
 
-  return sf->allow_exhaustive_searches &&
-         (sf->exhaustive_searches_thresh < INT_MAX) &&
-         (*x->ex_search_count_ptr <= max_ex) && !cpi->rc.is_src_frame_alt_ref;
+#if CONFIG_MULTITHREAD
+  if (NULL != x->search_count_mutex) pthread_mutex_lock(x->search_count_mutex);
+#endif
+
+  max_ex = VPXMAX(MIN_EX_SEARCH_LIMIT,
+                  (*x->m_search_count_ptr * sf->max_exaustive_pct) / 100);
+
+  is_exhaustive_allowed = sf->allow_exhaustive_searches &&
+                          (sf->exhaustive_searches_thresh < INT_MAX) &&
+                          (*x->ex_search_count_ptr <= max_ex) &&
+                          !cpi->rc.is_src_frame_alt_ref;
+
+#if CONFIG_MULTITHREAD
+  if (NULL != x->search_count_mutex)
+    pthread_mutex_unlock(x->search_count_mutex);
+#endif
+
+  return is_exhaustive_allowed;
 }
 
 int vp9_full_pixel_search(VP9_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bsize,
-                          MV *mvp_full, int step_param, int error_per_bit,
-                          int *cost_list, const MV *ref_mv, MV *tmp_mv,
-                          int var_max, int rd) {
+                          MV *mvp_full, int step_param, int search_method,
+                          int error_per_bit, int *cost_list, const MV *ref_mv,
+                          MV *tmp_mv, int var_max, int rd) {
   const SPEED_FEATURES *const sf = &cpi->sf;
-  const SEARCH_METHODS method = sf->mv.search_method;
+  const SEARCH_METHODS method = (SEARCH_METHODS)search_method;
   vp9_variance_fn_ptr_t *fn_ptr = &cpi->fn_ptr[bsize];
   int var = 0;
   if (cost_list) {
@@ -2382,9 +2402,6 @@ int vp9_full_pixel_search(VP9_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bsize,
     cost_list[3] = INT_MAX;
     cost_list[4] = INT_MAX;
   }
-
-  // Keep track of number of searches (this frame in this thread).
-  ++(*x->m_search_count_ptr);
 
   switch (method) {
     case FAST_DIAMOND:
@@ -2411,6 +2428,19 @@ int vp9_full_pixel_search(VP9_COMP *cpi, MACROBLOCK *x, BLOCK_SIZE bsize,
       var = full_pixel_diamond(cpi, x, mvp_full, step_param, error_per_bit,
                                MAX_MVSEARCH_STEPS - 1 - step_param, 1,
                                cost_list, fn_ptr, ref_mv, tmp_mv);
+
+#if CONFIG_MULTITHREAD
+      if (NULL != x->search_count_mutex)
+        pthread_mutex_lock(x->search_count_mutex);
+#endif
+
+      // Keep track of number of searches (this frame in this thread).
+      ++(*x->m_search_count_ptr);
+
+#if CONFIG_MULTITHREAD
+      if (NULL != x->search_count_mutex)
+        pthread_mutex_unlock(x->search_count_mutex);
+#endif
 
       // Should we allow a follow on exhaustive search?
       if (is_exhaustive_allowed(cpi, x)) {

@@ -547,6 +547,23 @@ enum vp8e_enc_control_id {
    */
   VP9E_SET_TARGET_LEVEL,
 
+  /*!\brief Codec control function to set row level multi-threading.
+  *
+  * 0 : off, 1 : on
+  *
+  * Supported in codecs: VP9
+  */
+  VP9E_SET_ROW_MT,
+
+  /*!\brief Codec control function to enable bit-exact bitstream when row level
+   * multi-threading is enabled.
+   *
+   * 0 : off, 1 : on
+   *
+   * Supported in codecs: VP9
+   */
+  VP9E_ENABLE_ROW_MT_BIT_EXACT,
+
   /*!\brief Codec control function to get bitstream level.
    *
    * Supported in codecs: VP9
@@ -561,7 +578,22 @@ enum vp8e_enc_control_id {
    *
    * Supported in codecs: VP9
    */
-  VP9E_SET_ALT_REF_AQ
+  VP9E_SET_ALT_REF_AQ,
+
+  /*!\brief Boost percentage for Golden Frame in CBR mode.
+    *
+    * This value controls the amount of boost given to Golden Frame in
+    * CBR mode. It is expressed as a percentage of the average
+    * per-frame bitrate, with the special (and default) value 0 meaning
+    * the feature is off, i.e., no golden frame boost in CBR mode and
+    * average bitrate target is used.
+    *
+    * For example, to allow 100% more bits, i.e, 2X, in a golden frame
+    * than average frame, set this to 100.
+    *
+    * Supported in codecs: VP8
+    */
+  VP8E_SET_GF_CBR_BOOST_PCT,
 };
 
 /*!\brief vpx 1-D scaling mode
@@ -769,6 +801,9 @@ VPX_CTRL_USE_TYPE(VP8E_SET_MAX_INTRA_BITRATE_PCT, unsigned int)
 VPX_CTRL_USE_TYPE(VP8E_SET_MAX_INTER_BITRATE_PCT, unsigned int)
 #define VPX_CTRL_VP8E_SET_MAX_INTER_BITRATE_PCT
 
+VPX_CTRL_USE_TYPE(VP8E_SET_GF_CBR_BOOST_PCT, unsigned int)
+#define VPX_CTRL_VP8E_SET_GF_CBR_BOOST_PCT
+
 VPX_CTRL_USE_TYPE(VP8E_SET_SCREEN_CONTENT_MODE, unsigned int)
 #define VPX_CTRL_VP8E_SET_SCREEN_CONTENT_MODE
 
@@ -819,6 +854,12 @@ VPX_CTRL_USE_TYPE(VP9E_SET_RENDER_SIZE, int *)
 
 VPX_CTRL_USE_TYPE(VP9E_SET_TARGET_LEVEL, unsigned int)
 #define VPX_CTRL_VP9E_SET_TARGET_LEVEL
+
+VPX_CTRL_USE_TYPE(VP9E_SET_ROW_MT, unsigned int)
+#define VPX_CTRL_VP9E_SET_ROW_MT
+
+VPX_CTRL_USE_TYPE(VP9E_ENABLE_ROW_MT_BIT_EXACT, unsigned int)
+#define VPX_CTRL_VP9E_ENABLE_ROW_MT_BIT_EXACT
 
 VPX_CTRL_USE_TYPE(VP9E_GET_LEVEL, int *)
 #define VPX_CTRL_VP9E_GET_LEVEL

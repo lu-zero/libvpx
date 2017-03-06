@@ -635,7 +635,7 @@ setup_gnu_toolchain() {
   AS=${AS:-${CROSS}as}
   STRIP=${STRIP:-${CROSS}strip}
   NM=${NM:-${CROSS}nm}
-  AS_SFX=.s
+  AS_SFX=.S
   EXE_SFX=
 }
 
@@ -728,7 +728,14 @@ process_common_toolchain() {
         tgt_isa=x86_64
         tgt_os=darwin15
         ;;
+      *darwin16*)
+        tgt_isa=x86_64
+        tgt_os=darwin16
+        ;;
       x86_64*mingw32*)
+        tgt_os=win64
+        ;;
+      x86_64*cygwin*)
         tgt_os=win64
         ;;
       *mingw32*|*cygwin*)
@@ -849,6 +856,10 @@ process_common_toolchain() {
       add_cflags  "-mmacosx-version-min=10.11"
       add_ldflags "-mmacosx-version-min=10.11"
       ;;
+    *-darwin16-*)
+      add_cflags  "-mmacosx-version-min=10.12"
+      add_ldflags "-mmacosx-version-min=10.12"
+      ;;
     *-iphonesimulator-*)
       add_cflags  "-miphoneos-version-min=${IOS_VERSION_MIN}"
       add_ldflags "-miphoneos-version-min=${IOS_VERSION_MIN}"
@@ -932,7 +943,7 @@ EOF
           ;;
         vs*)
           asm_conversion_cmd="${source_path}/build/make/ads2armasm_ms.pl"
-          AS_SFX=.s
+          AS_SFX=.S
           msvs_arch_dir=arm-msvs
           disable_feature multithread
           disable_feature unit_tests
@@ -942,6 +953,7 @@ EOF
             # only "AppContainerApplication" which requires an AppxManifest.
             # Therefore disable the examples, just build the library.
             disable_feature examples
+            disable_feature tools
           fi
           ;;
         rvct)
@@ -1040,7 +1052,7 @@ EOF
           STRIP="$(${XCRUN_FIND} strip)"
           NM="$(${XCRUN_FIND} nm)"
           RANLIB="$(${XCRUN_FIND} ranlib)"
-          AS_SFX=.s
+          AS_SFX=.S
           LD="${CXX:-$(${XCRUN_FIND} ld)}"
 
           # ASFLAGS is written here instead of using check_add_asflags

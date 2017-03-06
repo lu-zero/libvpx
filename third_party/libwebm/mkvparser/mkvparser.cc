@@ -4117,7 +4117,7 @@ ContentEncoding::~ContentEncoding() {
 }
 
 const ContentEncoding::ContentCompression*
-    ContentEncoding::GetCompressionByIndex(unsigned long idx) const {
+ContentEncoding::GetCompressionByIndex(unsigned long idx) const {
   const ptrdiff_t count = compression_entries_end_ - compression_entries_;
   assert(count >= 0);
 
@@ -5219,7 +5219,7 @@ bool Projection::Parse(IMkvReader* reader, long long start, long long size,
 
       if (status) {
         delete[] data;
-        return status;
+        return false;
       }
 
       projection_ptr->private_data = data;

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "./vpx_dsp_rtcd.h"
 #include "vpx_dsp/vpx_dsp_common.h"
 #include "vpx_mem/vpx_mem.h"
 #include "vpx_ports/mem.h"
@@ -45,7 +46,7 @@
 
 #define FRAME_OVERHEAD_BITS 200
 
-// Use this macro to turn on/off use of alt-refs in one-pass mode.
+// Use this macro to turn on/off use of alt-refs in one-pass vbr mode.
 #define USE_ALTREF_FOR_ONE_PASS 0
 
 #if CONFIG_VP9_HIGHBITDEPTH
@@ -93,10 +94,17 @@ static int inter_minq_12[QINDEX_RANGE];
 static int rtc_minq_12[QINDEX_RANGE];
 #endif
 
+#ifdef AGGRESSIVE_VBR
+static int gf_high = 2400;
+static int gf_low = 400;
+static int kf_high = 4000;
+static int kf_low = 400;
+#else
 static int gf_high = 2000;
 static int gf_low = 400;
 static int kf_high = 5000;
 static int kf_low = 400;
+#endif
 
 // Functions to compute the active minq lookup table entries based on a
 // formulaic approach to facilitate easier adjustment of the Q tables.
@@ -126,9 +134,14 @@ static void init_minq_luts(int *kf_low_m, int *kf_high_m, int *arfgf_low,
     const double maxq = vp9_convert_qindex_to_q(i, bit_depth);
     kf_low_m[i] = get_minq_index(maxq, 0.000001, -0.0004, 0.150, bit_depth);
     kf_high_m[i] = get_minq_index(maxq, 0.0000021, -0.00125, 0.55, bit_depth);
+#ifdef AGGRESSIVE_VBR
+    arfgf_low[i] = get_minq_index(maxq, 0.0000015, -0.0009, 0.275, bit_depth);
+    inter[i] = get_minq_index(maxq, 0.00000271, -0.00113, 0.80, bit_depth);
+#else
     arfgf_low[i] = get_minq_index(maxq, 0.0000015, -0.0009, 0.30, bit_depth);
-    arfgf_high[i] = get_minq_index(maxq, 0.0000021, -0.00125, 0.55, bit_depth);
     inter[i] = get_minq_index(maxq, 0.00000271, -0.00113, 0.70, bit_depth);
+#endif
+    arfgf_high[i] = get_minq_index(maxq, 0.0000021, -0.00125, 0.55, bit_depth);
     rtc[i] = get_minq_index(maxq, 0.00000271, -0.00113, 0.70, bit_depth);
   }
 }
@@ -164,6 +177,17 @@ double vp9_convert_qindex_to_q(int qindex, vpx_bit_depth_t bit_depth) {
 #else
   return vp9_ac_quant(qindex, 0, bit_depth) / 4.0;
 #endif
+}
+
+int vp9_convert_q_to_qindex(double q_val, vpx_bit_depth_t bit_depth) {
+  int i;
+
+  for (i = 0; i < QINDEX_RANGE; ++i)
+    if (vp9_convert_qindex_to_q(i, bit_depth) >= q_val) break;
+
+  if (i == QINDEX_RANGE) i--;
+
+  return i;
 }
 
 int vp9_rc_bits_per_mb(FRAME_TYPE frame_type, int qindex,
@@ -414,7 +438,7 @@ static double get_rate_correction_factor(const VP9_COMP *cpi) {
   } else {
     if ((cpi->refresh_alt_ref_frame || cpi->refresh_golden_frame) &&
         !rc->is_src_frame_alt_ref && !cpi->use_svc &&
-        (cpi->oxcf.rc_mode != VPX_CBR || cpi->oxcf.gf_cbr_boost_pct > 20))
+        (cpi->oxcf.rc_mode != VPX_CBR || cpi->oxcf.gf_cbr_boost_pct > 100))
       rcf = rc->rate_correction_factors[GF_ARF_STD];
     else
       rcf = rc->rate_correction_factors[INTER_NORMAL];
@@ -440,7 +464,7 @@ static void set_rate_correction_factor(VP9_COMP *cpi, double factor) {
   } else {
     if ((cpi->refresh_alt_ref_frame || cpi->refresh_golden_frame) &&
         !rc->is_src_frame_alt_ref && !cpi->use_svc &&
-        (cpi->oxcf.rc_mode != VPX_CBR || cpi->oxcf.gf_cbr_boost_pct > 20))
+        (cpi->oxcf.rc_mode != VPX_CBR || cpi->oxcf.gf_cbr_boost_pct > 100))
       rc->rate_correction_factors[GF_ARF_STD] = factor;
     else
       rc->rate_correction_factors[INTER_NORMAL] = factor;
@@ -537,7 +561,8 @@ int vp9_rc_regulate_q(const VP9_COMP *cpi, int target_bits_per_frame,
 
   do {
     if (cpi->oxcf.aq_mode == CYCLIC_REFRESH_AQ && cm->seg.enabled &&
-        cpi->svc.temporal_layer_id == 0) {
+        cpi->svc.temporal_layer_id == 0 &&
+        (!cpi->oxcf.gf_cbr_boost_pct || !cpi->refresh_golden_frame)) {
       bits_per_mb_at_this_q =
           (int)vp9_cyclic_refresh_rc_bits_per_mb(cpi, i, correction_factor);
     } else {
@@ -560,15 +585,17 @@ int vp9_rc_regulate_q(const VP9_COMP *cpi, int target_bits_per_frame,
   // In CBR mode, this makes sure q is between oscillating Qs to prevent
   // resonance.
   if (cpi->oxcf.rc_mode == VPX_CBR &&
+      (!cpi->oxcf.gf_cbr_boost_pct ||
+       !(cpi->refresh_alt_ref_frame || cpi->refresh_golden_frame)) &&
       (cpi->rc.rc_1_frame * cpi->rc.rc_2_frame == -1) &&
       cpi->rc.q_1_frame != cpi->rc.q_2_frame) {
     q = clamp(q, VPXMIN(cpi->rc.q_1_frame, cpi->rc.q_2_frame),
               VPXMAX(cpi->rc.q_1_frame, cpi->rc.q_2_frame));
   }
 #if USE_ALTREF_FOR_ONE_PASS
-  if (cpi->oxcf.pass == 0 && cpi->oxcf.rc_mode == VPX_VBR &&
-      cpi->oxcf.lag_in_frames > 0 && cpi->rc.is_src_frame_alt_ref &&
-      !cpi->rc.alt_ref_gf_group) {
+  if (cpi->oxcf.enable_auto_arf && cpi->oxcf.pass == 0 &&
+      cpi->oxcf.rc_mode == VPX_VBR && cpi->oxcf.lag_in_frames > 0 &&
+      cpi->rc.is_src_frame_alt_ref && !cpi->rc.alt_ref_gf_group) {
     q = VPXMIN(q, (q + cpi->rc.last_boosted_qindex) >> 1);
   }
 #endif
@@ -1528,8 +1555,14 @@ void vp9_rc_get_one_pass_vbr_params(VP9_COMP *cpi) {
     adjust_gfint_frame_constraint(cpi, rc->frames_to_key);
     rc->frames_till_gf_update_due = rc->baseline_gf_interval;
     cpi->refresh_golden_frame = 1;
-    rc->source_alt_ref_pending = USE_ALTREF_FOR_ONE_PASS;
-    rc->alt_ref_gf_group = USE_ALTREF_FOR_ONE_PASS;
+    rc->source_alt_ref_pending = 0;
+    rc->alt_ref_gf_group = 0;
+#if USE_ALTREF_FOR_ONE_PASS
+    if (cpi->oxcf.enable_auto_arf) {
+      rc->source_alt_ref_pending = 1;
+      rc->alt_ref_gf_group = 1;
+    }
+#endif
   }
   if (cm->frame_type == KEY_FRAME)
     target = calc_iframe_target_size_one_pass_vbr(cpi);
@@ -2129,7 +2162,7 @@ void adjust_gf_boost_lag_one_pass_vbr(VP9_COMP *cpi, uint64_t avg_sad_current) {
     // Adjust factors for active_worst setting & af_ratio for next gf interval.
     rc->fac_active_worst_inter = 150;  // corresponds to 3/2 (= 150 /100).
     rc->fac_active_worst_gf = 100;
-    if (rate_err < 1.5 && !high_content) {
+    if (rate_err < 2.0 && !high_content) {
       rc->fac_active_worst_inter = 120;
       rc->fac_active_worst_gf = 90;
     }
@@ -2140,20 +2173,22 @@ void adjust_gf_boost_lag_one_pass_vbr(VP9_COMP *cpi, uint64_t avg_sad_current) {
       rc->gfu_boost = DEFAULT_GF_BOOST >> 2;
     }
 #if USE_ALTREF_FOR_ONE_PASS
-    // Don't use alt-ref if there is a scene cut within the group,
-    // or content is not low.
-    if ((rc->high_source_sad_lagindex > 0 &&
-         rc->high_source_sad_lagindex <= rc->frames_till_gf_update_due) ||
-        (avg_source_sad_lag > 3 * sad_thresh1 >> 3)) {
-      rc->source_alt_ref_pending = 0;
-      rc->alt_ref_gf_group = 0;
-    } else {
-      rc->source_alt_ref_pending = 1;
-      rc->alt_ref_gf_group = 1;
-      // If alt-ref is used for this gf group, limit the interval.
-      if (rc->baseline_gf_interval > 10 &&
-          rc->baseline_gf_interval < rc->frames_to_key)
-        rc->baseline_gf_interval = 10;
+    if (cpi->oxcf.enable_auto_arf) {
+      // Don't use alt-ref if there is a scene cut within the group,
+      // or content is not low.
+      if ((rc->high_source_sad_lagindex > 0 &&
+           rc->high_source_sad_lagindex <= rc->frames_till_gf_update_due) ||
+          (avg_source_sad_lag > 3 * sad_thresh1 >> 3)) {
+        rc->source_alt_ref_pending = 0;
+        rc->alt_ref_gf_group = 0;
+      } else {
+        rc->source_alt_ref_pending = 1;
+        rc->alt_ref_gf_group = 1;
+        // If alt-ref is used for this gf group, limit the interval.
+        if (rc->baseline_gf_interval > 10 &&
+            rc->baseline_gf_interval < rc->frames_to_key)
+          rc->baseline_gf_interval = 10;
+      }
     }
 #endif
     target = calc_pframe_target_size_one_pass_vbr(cpi);
@@ -2170,6 +2205,9 @@ void adjust_gf_boost_lag_one_pass_vbr(VP9_COMP *cpi, uint64_t avg_sad_current) {
 void vp9_avg_source_sad(VP9_COMP *cpi) {
   VP9_COMMON *const cm = &cpi->common;
   RATE_CONTROL *const rc = &cpi->rc;
+#if CONFIG_VP9_HIGHBITDEPTH
+  if (cm->use_highbitdepth) return;
+#endif
   rc->high_source_sad = 0;
   if (cpi->Last_Source != NULL &&
       cpi->Last_Source->y_width == cpi->Source->y_width &&
@@ -2231,9 +2269,11 @@ void vp9_avg_source_sad(VP9_COMP *cpi) {
         const BLOCK_SIZE bsize = BLOCK_64X64;
         // Loop over sub-sample of frame, compute average sad over 64x64 blocks.
         uint64_t avg_sad = 0;
+        uint64_t tmp_sad = 0;
         int num_samples = 0;
         int sb_cols = (cm->mi_cols + MI_BLOCK_SIZE - 1) / MI_BLOCK_SIZE;
         int sb_rows = (cm->mi_rows + MI_BLOCK_SIZE - 1) / MI_BLOCK_SIZE;
+        uint64_t avg_source_sad_threshold = 10000;
         if (cpi->oxcf.lag_in_frames > 0) {
           src_y = frames[frame]->y_buffer;
           src_ystride = frames[frame]->y_stride;
@@ -2243,13 +2283,30 @@ void vp9_avg_source_sad(VP9_COMP *cpi) {
         for (sbi_row = 0; sbi_row < sb_rows; ++sbi_row) {
           for (sbi_col = 0; sbi_col < sb_cols; ++sbi_col) {
             // Checker-board pattern, ignore boundary.
-            if ((sbi_row > 0 && sbi_col > 0) &&
-                (sbi_row < sb_rows - 1 && sbi_col < sb_cols - 1) &&
-                ((sbi_row % 2 == 0 && sbi_col % 2 == 0) ||
-                 (sbi_row % 2 != 0 && sbi_col % 2 != 0))) {
+            // If the use_source_sad is on, compute for every superblock.
+            if (cpi->sf.use_source_sad ||
+                ((sbi_row > 0 && sbi_col > 0) &&
+                 (sbi_row < sb_rows - 1 && sbi_col < sb_cols - 1) &&
+                 ((sbi_row % 2 == 0 && sbi_col % 2 == 0) ||
+                  (sbi_row % 2 != 0 && sbi_col % 2 != 0)))) {
+              tmp_sad = cpi->fn_ptr[bsize].sdf(src_y, src_ystride, last_src_y,
+                                               last_src_ystride);
+              if (cpi->sf.use_source_sad) {
+                unsigned int tmp_sse;
+                unsigned int tmp_variance = vpx_variance64x64(
+                    src_y, src_ystride, last_src_y, last_src_ystride, &tmp_sse);
+                // Note: tmp_sse - tmp_variance = ((sum * sum) >> 12)
+                if (tmp_sad < avg_source_sad_threshold)
+                  cpi->content_state_sb[num_samples] =
+                      ((tmp_sse - tmp_variance) < 25) ? kLowSadLowSumdiff
+                                                      : kLowSadHighSumdiff;
+                else
+                  cpi->content_state_sb[num_samples] =
+                      ((tmp_sse - tmp_variance) < 25) ? kHighSadLowSumdiff
+                                                      : kHighSadHighSumdiff;
+              }
+              avg_sad += tmp_sad;
               num_samples++;
-              avg_sad += cpi->fn_ptr[bsize].sdf(src_y, src_ystride, last_src_y,
-                                                last_src_ystride);
             }
             src_y += 64;
             last_src_y += 64;
@@ -2284,7 +2341,10 @@ void vp9_avg_source_sad(VP9_COMP *cpi) {
         cpi->ext_refresh_frame_flags_pending == 0) {
       int target;
       cpi->refresh_golden_frame = 1;
-      rc->source_alt_ref_pending = USE_ALTREF_FOR_ONE_PASS;
+      rc->source_alt_ref_pending = 0;
+#if USE_ALTREF_FOR_ONE_PASS
+      if (cpi->oxcf.enable_auto_arf) rc->source_alt_ref_pending = 1;
+#endif
       rc->gfu_boost = DEFAULT_GF_BOOST >> 1;
       rc->baseline_gf_interval =
           VPXMIN(20, VPXMAX(10, rc->baseline_gf_interval));

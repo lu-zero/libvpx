@@ -12,7 +12,7 @@
 # ARM assembly files are written in RVCT-style. We use some make magic to
 # filter those files to allow GCC compilation
 ifeq ($(ARCH_ARM),yes)
-  ASM:=$(if $(filter yes,$(CONFIG_GCC)$(CONFIG_MSVS)),.asm.s,.asm)
+  ASM:=$(if $(filter yes,$(CONFIG_GCC)$(CONFIG_MSVS)),.asm.S,.asm)
 else
   ASM:=.asm
 endif
@@ -149,6 +149,7 @@ CODEC_SRCS-yes += $(BUILD_PFX)vpx_config.c
 INSTALL-SRCS-no += $(BUILD_PFX)vpx_config.c
 ifeq ($(ARCH_X86)$(ARCH_X86_64),yes)
 INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += third_party/x86inc/x86inc.asm
+INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += vpx_dsp/x86/bitdepth_conversion_sse2.asm
 endif
 CODEC_EXPORTS-yes += vpx/exports_com
 CODEC_EXPORTS-$(CONFIG_ENCODERS) += vpx/exports_enc
@@ -204,6 +205,7 @@ ASM_INCLUDES := \
     third_party/x86inc/x86inc.asm \
     vpx_config.asm \
     vpx_ports/x86_abi_support.asm \
+    vpx_dsp/x86/bitdepth_conversion_sse2.asm \
 
 vpx.$(VCPROJ_SFX): $(CODEC_SRCS) vpx.def
 	@echo "    [CREATE] $@"
@@ -233,7 +235,7 @@ LIBS-$(if yes,$(CONFIG_STATIC)) += $(BUILD_PFX)libvpx.a $(BUILD_PFX)libvpx_g.a
 $(BUILD_PFX)libvpx_g.a: $(LIBVPX_OBJS)
 
 SO_VERSION_MAJOR := 4
-SO_VERSION_MINOR := 0
+SO_VERSION_MINOR := 1
 SO_VERSION_PATCH := 0
 ifeq ($(filter darwin%,$(TGT_OS)),$(TGT_OS))
 LIBVPX_SO               := libvpx.$(SO_VERSION_MAJOR).dylib
@@ -366,7 +368,7 @@ endif
 #
 # Add assembler dependencies for configuration.
 #
-$(filter %.s.o,$(OBJS-yes)):     $(BUILD_PFX)vpx_config.asm
+$(filter %.S.o,$(OBJS-yes)):     $(BUILD_PFX)vpx_config.asm
 $(filter %$(ASM).o,$(OBJS-yes)): $(BUILD_PFX)vpx_config.asm
 
 
@@ -391,11 +393,15 @@ LIBVPX_TEST_SRCS=$(addprefix test/,$(call enabled,LIBVPX_TEST_SRCS))
 LIBVPX_TEST_BIN=./test_libvpx$(EXE_SFX)
 LIBVPX_TEST_DATA=$(addprefix $(LIBVPX_TEST_DATA_PATH)/,\
                      $(call enabled,LIBVPX_TEST_DATA))
-libvpx_test_data_url=http://downloads.webmproject.org/test_data/libvpx/$(1)
+libvpx_test_data_url=https://storage.googleapis.com/downloads.webmproject.org/test_data/libvpx/$(1)
 
 TEST_INTRA_PRED_SPEED_BIN=./test_intra_pred_speed$(EXE_SFX)
 TEST_INTRA_PRED_SPEED_SRCS=$(addprefix test/,$(call enabled,TEST_INTRA_PRED_SPEED_SRCS))
 TEST_INTRA_PRED_SPEED_OBJS := $(sort $(call objs,$(TEST_INTRA_PRED_SPEED_SRCS)))
+
+TEST_HADAMARD_SPEED_BIN=./test_hadamard_speed$(EXE_SFX)
+TEST_HADAMARD_SPEED_SRCS=$(addprefix test/,$(call enabled,TEST_HADAMARD_SPEED_SRCS))
+TEST_HADAMARD_SPEED_OBJS := $(sort $(call objs,$(TEST_HADAMARD_SPEED_SRCS)))
 
 libvpx_test_srcs.txt:
 	@echo "    [CREATE] $@"
@@ -405,7 +411,7 @@ CLEAN-OBJS += libvpx_test_srcs.txt
 $(LIBVPX_TEST_DATA): $(SRC_PATH_BARE)/test/test-data.sha1
 	@echo "    [DOWNLOAD] $@"
 	$(qexec)trap 'rm -f $@' INT TERM &&\
-            curl -L -o $@ $(call libvpx_test_data_url,$(@F))
+            curl --retry 1 -L -o $@ $(call libvpx_test_data_url,$(@F))
 
 testdata:: $(LIBVPX_TEST_DATA)
 	$(qexec)[ -x "$$(which sha1sum)" ] && sha1sum=sha1sum;\
@@ -478,6 +484,24 @@ test_intra_pred_speed.$(VCPROJ_SFX): $(TEST_INTRA_PRED_SPEED_SRCS) vpx.$(VCPROJ_
             -I. -I"$(SRC_PATH_BARE)/third_party/googletest/src/include" \
             -L. -l$(CODEC_LIB) -l$(GTEST_LIB) $^
 endif  # TEST_INTRA_PRED_SPEED
+
+ifneq ($(strip $(TEST_HADAMARD_SPEED_OBJS)),)
+PROJECTS-$(CONFIG_MSVS) += test_hadamard_speed.$(VCPROJ_SFX)
+test_hadamard_speed.$(VCPROJ_SFX): $(TEST_HADAMARD_SPEED_SRCS) vpx.$(VCPROJ_SFX) gtest.$(VCPROJ_SFX)
+	@echo "    [CREATE] $@"
+	$(qexec)$(GEN_VCPROJ) \
+            --exe \
+            --target=$(TOOLCHAIN) \
+            --name=test_hadamard_speed \
+            -D_VARIADIC_MAX=10 \
+            --proj-guid=B1FC37A1-A7F2-4989-BC49-49B2AFC2288C\
+            --ver=$(CONFIG_VS_VERSION) \
+            --src-path-bare="$(SRC_PATH_BARE)" \
+            $(if $(CONFIG_STATIC_MSVCRT),--static-crt) \
+            --out=$@ $(INTERNAL_CFLAGS) $(CFLAGS) \
+            -I. -I"$(SRC_PATH_BARE)/third_party/googletest/src/include" \
+            -L. -l$(CODEC_LIB) -l$(GTEST_LIB) $^
+endif  # TEST_HADAMARD_SPEED
 endif
 else
 
@@ -519,6 +543,17 @@ $(eval $(call linkerxx_template,$(TEST_INTRA_PRED_SPEED_BIN), \
               -L. -lvpx -lgtest $(extralibs) -lm))
 endif  # TEST_INTRA_PRED_SPEED
 
+ifneq ($(strip $(TEST_HADAMARD_SPEED_OBJS)),)
+$(TEST_HADAMARD_SPEED_OBJS) $(TEST_HADAMARD_SPEED_OBJS:.o=.d): CXXFLAGS += $(GTEST_INCLUDES)
+OBJS-yes += $(TEST_HADAMARD_SPEED_OBJS)
+BINS-yes += $(TEST_HADAMARD_SPEED_BIN)
+
+$(TEST_HADAMARD_SPEED_BIN): $(TEST_LIBS)
+$(eval $(call linkerxx_template,$(TEST_HADAMARD_SPEED_BIN), \
+              $(TEST_HADAMARD_SPEED_OBJS) \
+              -L. -lvpx -lgtest $(extralibs) -lm))
+endif  # TEST_HADAMARD_SPEED
+
 endif  # CONFIG_UNIT_TESTS
 
 # Install test sources only if codec source is included
@@ -526,6 +561,7 @@ INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += $(patsubst $(SRC_PATH_BARE)/%,%,\
     $(shell find $(SRC_PATH_BARE)/third_party/googletest -type f))
 INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += $(LIBVPX_TEST_SRCS)
 INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += $(TEST_INTRA_PRED_SPEED_SRCS)
+INSTALL-SRCS-$(CONFIG_CODEC_SRCS) += $(TEST_HADAMARD_SPEED_SRCS)
 
 define test_shard_template
 test:: test_shard.$(1)
