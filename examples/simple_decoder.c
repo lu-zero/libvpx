@@ -80,7 +80,7 @@
 #include <string.h>
 
 #include "vpx/vpx_decoder.h"
-
+#include "vpx/vpx_transpose.h"
 #include "../tools_common.h"
 #include "../video_reader.h"
 #include "./vpx_config.h"
@@ -88,12 +88,16 @@
 static const char *exec_name;
 
 void usage_exit(void) {
-  fprintf(stderr, "Usage: %s <infile> <outfile>\n", exec_name);
+  fprintf(stderr, "Usage: %s [-transpose] <infile> <outfile>\n", exec_name);
   exit(EXIT_FAILURE);
 }
 
 int main(int argc, char **argv) {
+  char *in_file_name;
+  char *out_file_name;
   int frame_cnt = 0;
+  int transpose = 0;
+  int argi;
   FILE *outfile = NULL;
   vpx_codec_ctx_t codec;
   VpxVideoReader *reader = NULL;
@@ -101,14 +105,40 @@ int main(int argc, char **argv) {
   const VpxVideoInfo *info = NULL;
 
   exec_name = argv[0];
+  in_file_name = NULL;
+  out_file_name = NULL;
 
-  if (argc != 3) die("Invalid number of arguments.");
+  if (argc < 3 || argc > 4) die("Invalid number of arguments.");
 
-  reader = vpx_video_reader_open(argv[1]);
-  if (!reader) die("Failed to open %s for reading.", argv[1]);
+  for (argi = 1; argi < argc; ++argi) {
+    if (argv[argi][0] == '-' && argv[argi][1] == '-') {
+      argv[argi]++;
+    }
+    if (argv[argi][0] == '-') {
+      if (strlen(argv[argi]) > 1 &&
+          memcmp(argv[argi], "-transpose", strlen(argv[argi])) == 0) {
+        transpose = 1;
+      } else {
+        usage_exit();
+      }
+    } else if (in_file_name == NULL) {
+      in_file_name = argv[argi];
+    } else if (out_file_name == NULL) {
+      out_file_name = argv[argi];
+    } else {
+      usage_exit();
+    }
+  }
 
-  if (!(outfile = fopen(argv[2], "wb")))
-    die("Failed to open %s for writing.", argv[2]);
+  if (in_file_name == NULL || out_file_name == NULL) {
+    usage_exit();
+  }
+
+  reader = vpx_video_reader_open(in_file_name);
+  if (!reader) die("Failed to open %s for reading.", in_file_name);
+
+  if (!(outfile = fopen(out_file_name, "wb")))
+    die("Failed to open %s for writing.", out_file_name);
 
   info = vpx_video_reader_get_info(reader);
 
@@ -123,6 +153,7 @@ int main(int argc, char **argv) {
   while (vpx_video_reader_read_frame(reader)) {
     vpx_codec_iter_t iter = NULL;
     vpx_image_t *img = NULL;
+    vpx_image_t *imgt = NULL;
     size_t frame_size = 0;
     const unsigned char *frame =
         vpx_video_reader_get_frame(reader, &frame_size);
@@ -130,7 +161,12 @@ int main(int argc, char **argv) {
       die_codec(&codec, "Failed to decode frame.");
 
     while ((img = vpx_codec_get_frame(&codec, &iter)) != NULL) {
-      vpx_img_write(img, outfile);
+      if (transpose) {
+        imgt = vpx_img_transpose(imgt, img);
+      } else {
+        imgt = img;
+      }
+      vpx_img_write(imgt, outfile);
       ++frame_cnt;
     }
   }
@@ -138,9 +174,13 @@ int main(int argc, char **argv) {
   printf("Processed %d frames.\n", frame_cnt);
   if (vpx_codec_destroy(&codec)) die_codec(&codec, "Failed to destroy codec");
 
-  printf("Play: ffplay -f rawvideo -pix_fmt yuv420p -s %dx%d %s\n",
-         info->frame_width, info->frame_height, argv[2]);
-
+  if (transpose) {
+    printf("Play: ffplay -f rawvideo -pix_fmt yuv420p -s %dx%d %s\n",
+           info->frame_height, info->frame_width, out_file_name);
+  } else {
+    printf("Play: ffplay -f rawvideo -pix_fmt yuv420p -s %dx%d %s\n",
+           info->frame_width, info->frame_height, out_file_name);
+  }
   vpx_video_reader_close(reader);
 
   fclose(outfile);
